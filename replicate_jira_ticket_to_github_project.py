@@ -28,6 +28,7 @@ def fetch_jira_issues(jql_query="project=Pikselite"):
         auth=HTTPBasicAuth(JIRA_USER, JIRA_API_TOKEN),
     )
     response.raise_for_status()
+    # print(response.json()["issues"])
     return response.json()["issues"]
 
 
@@ -77,27 +78,32 @@ def replicate_jira_to_github():
         fields = issue.get("fields", {})
 
         # Basic fields
+        column = fields.get("status", {}).get("name", "Not set")
         title = fields.get("summary", "No summary provided")
         description = fields.get("description", "No description provided")
         jira_url = f"{JIRA_BASE_URL}/browse/{issue['key']}"
 
+        start_date = fields.get("customfield_10015", "Not set")
+        due_date = fields.get("duedate", "Not set")
         story_points = fields.get("customfield_10016", "Not set")
-        sprint = fields.get("customfield_10007", "Not set")
+        sprint = fields.get("customfield_10020", "Not set")
         if isinstance(sprint, list):
-            sprint = ", ".join(sprint)
+            sprint = ", ".join([s["name"] for s in sprint])
+        print(sprint)
         assignee = fields.get("assignee", {})
         assignee_name = assignee.get("displayName", "Unassigned")
         labels = fields.get("labels", [])
         labels_str = ", ".join(labels) if labels else "None"
         priority = fields.get("priority", {}).get("name", "Not set")
-        start_date = fields.get("startDate", "Not set")
-        due_date = fields.get("duedate", "Not set")
+
         parent = fields.get("parent")
         parent_info = parent.get("key") if parent else "No parent"
 
         # Build the GitHub issue body
         body = (
             f"**Jira Ticket:** [{issue['key']}]({jira_url})\n\n"
+            f"**Column:** {column}\n\n"
+            f"**Title:** {title}\n\n"
             f"**Description:**\n{description}\n\n"
             f"**Story Points:** {story_points}\n\n"
             f"**Sprint:** {sprint}\n\n"
@@ -110,11 +116,13 @@ def replicate_jira_to_github():
         )
 
         # Create the GitHub issue
+
         github_issue = create_github_issue(title, body)
         print(f"Created GitHub Issue #{github_issue['number']} for Jira {issue['key']}")
 
         # Add the newly created issue to the specified GitHub Project board
         # Ensure that the created issue's JSON contains the 'node_id' field
+
         issue_node_id = github_issue.get("node_id")
         if issue_node_id and GITHUB_PROJECT_ID:
             add_issue_to_project(GITHUB_PROJECT_ID, issue_node_id)

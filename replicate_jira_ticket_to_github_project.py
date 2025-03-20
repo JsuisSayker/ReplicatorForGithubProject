@@ -81,7 +81,7 @@ def replicate_jira_to_github():
         description = fields.get("description", "No description provided")
         jira_url = f"{JIRA_BASE_URL}/browse/{issue['key']}"
 
-        story_points = fields.get("customfield_10004", "Not set")
+        story_points = fields.get("customfield_10016", "Not set")
         sprint = fields.get("customfield_10007", "Not set")
         if isinstance(sprint, list):
             sprint = ", ".join(sprint)
@@ -111,7 +111,6 @@ def replicate_jira_to_github():
 
         # Create the GitHub issue
         github_issue = create_github_issue(title, body)
-        print(github_issue["node_id"])
         print(f"Created GitHub Issue #{github_issue['number']} for Jira {issue['key']}")
 
         # Add the newly created issue to the specified GitHub Project board

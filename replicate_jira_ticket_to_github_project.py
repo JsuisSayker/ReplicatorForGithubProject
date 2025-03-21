@@ -22,6 +22,7 @@ GITHUB_REPO_ID = os.getenv("GITHUB_REPO_ID")
 GITHUB_USERNAMES = os.getenv("GITHUB_USERNAMES")
 GITHUB_PROJECT_OWNER = os.getenv("GITHUB_PROJECT_OWNER")
 GITHUB_PROJECT_NAME = os.getenv("GITHUB_PROJECT_NAME")
+GITHUB_PROJECT_NUMBER = os.getenv("GITHUB_PROJECT_NUMBER")
 
 
 def fetch_jira_issues(jql_query=f"project={JIRA_PROJECT_NAME}"):
@@ -103,7 +104,7 @@ def get_project_details():
     query = f"""
     query {{
       user(login: "{GITHUB_PROJECT_OWNER}") {{
-        projectV2(number: 9) {{
+        projectV2(number: {GITHUB_PROJECT_NUMBER}) {{
           id
           title
           fields(first: 100) {{

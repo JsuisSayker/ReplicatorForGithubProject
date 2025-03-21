@@ -18,7 +18,6 @@ GITHUB_REPO = os.getenv("GITHUB_REPO")
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 # GitHub Project ID for Projects v2 (GraphQL ID)
 GITHUB_PROJECT_ID = os.getenv("GITHUB_PROJECT_ID")
-GITHUB_REPO_ID = os.getenv("GITHUB_REPO_ID")
 GITHUB_USERNAMES = os.getenv("GITHUB_USERNAMES")
 GITHUB_PROJECT_OWNER = os.getenv("GITHUB_PROJECT_OWNER")
 GITHUB_PROJECT_NAME = os.getenv("GITHUB_PROJECT_NAME")
@@ -38,7 +37,7 @@ def fetch_jira_issues(jql_query=f"project={JIRA_PROJECT_NAME}"):
     return response.json()["issues"]
 
 
-def create_repository_issue(title, body):
+def create_repository_issue(title, body, repo_id):
     """
     Creates an issue in the repository using GraphQL and returns its node ID.
     """
@@ -55,7 +54,7 @@ def create_repository_issue(title, body):
     """
     variables = {
         "input": {
-            "repositoryId": GITHUB_REPO_ID,
+            "repositoryId": repo_id,
             "title": title,
             "body": body
         }
@@ -88,8 +87,43 @@ def add_issue_to_project(issue_node_id):
     return result["data"]["addProjectV2ItemById"]["item"]["id"]
 
 
+def get_repository_id(owner, repository):
+    """
+    Retrieves the repository node ID from GitHub using the GraphQL API.
+
+    Parameters:
+      owner (str): The repository owner (username or organization).
+      repository (str): The repository name.
+      token (str): Your GitHub personal access token.
+
+    Returns:
+      str: The repository's node ID.
+    """
+    url = "https://api.github.com/graphql"
+    query = """
+    query {
+      repository(owner: "%s", name: "%s") {
+        id
+      }
+    }
+    """ % (owner, repository)
+
+    headers = {
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Content-Type": "application/json"
+    }
+
+    payload = {"query": query}
+
+    response = requests.post(url, headers=headers, json=payload)
+    response.raise_for_status()
+    data = response.json()
+    return data["data"]["repository"]["id"]
+
+
 def create_issue_on_board(title, body):
-    issue_node_id, issue_number = create_repository_issue(title, body)
+    repo_id = get_repository_id(GITHUB_PROJECT_OWNER, GITHUB_PROJECT_NAME)
+    issue_node_id, issue_number = create_repository_issue(title, body, repo_id)
     project_item_id = add_issue_to_project(issue_node_id)
     return project_item_id, issue_number
 
@@ -147,7 +181,6 @@ def run_graphql(query, variables):
     }
     response = requests.post(url, json={
         "query": query, "variables": variables}, headers=headers)
-    print(response.json())
     response.raise_for_status()
     return response.json()
 
@@ -206,7 +239,6 @@ def update_infos(issue_node_id, side_infos_dict, items_id, user_id, issue_id):
         if field_name:
             if field_name["name"] in side_infos_dict:
                 if field_name["name"] != "Sprint":
-                    print(field_name["dataType"])
                     sent_value = side_infos_dict[field_name["name"]]
                     key = field_name["dataType"].lower()
                     if field_name["dataType"] == "ASSIGNEES":
@@ -283,7 +315,6 @@ def replicate_jira_to_github():
         sprint = fields.get("customfield_10020", "Not set")
         if isinstance(sprint, list):
             sprint = ", ".join([s["name"] for s in sprint])
-        print(sprint)
         assignee = fields.get("assignee", {})
         assignee_name = assignee.get("displayName", "Unassigned")
         labels = fields.get("labels", [])

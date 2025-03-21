@@ -1,5 +1,6 @@
 import requests
 import os
+import json
 from requests.auth import HTTPBasicAuth
 from dotenv import load_dotenv
 
@@ -9,6 +10,7 @@ load_dotenv()
 JIRA_API_ENDPOINT = os.getenv("JIRA_API_ENDPOINT")
 JIRA_USER = os.getenv("JIRA_USER")
 JIRA_API_TOKEN = os.getenv("JIRA_API_TOKEN")
+JIRA_PROJECT_NAME = os.getenv("JIRA_PROJECT_NAME")
 JIRA_BASE_URL = os.getenv("JIRA_BASE_URL")
 
 GITHUB_API_ENDPOINT = os.getenv("GITHUB_API_ENDPOINT")
@@ -16,9 +18,13 @@ GITHUB_REPO = os.getenv("GITHUB_REPO")
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 # GitHub Project ID for Projects v2 (GraphQL ID)
 GITHUB_PROJECT_ID = os.getenv("GITHUB_PROJECT_ID")
+GITHUB_REPO_ID = os.getenv("GITHUB_REPO_ID")
+GITHUB_USERNAMES = os.getenv("GITHUB_USERNAMES")
+GITHUB_PROJECT_OWNER = os.getenv("GITHUB_PROJECT_OWNER")
+GITHUB_PROJECT_NAME = os.getenv("GITHUB_PROJECT_NAME")
 
 
-def fetch_jira_issues(jql_query="project=Pikselite"):
+def fetch_jira_issues(jql_query=f"project={JIRA_PROJECT_NAME}"):
     headers = {"Accept": "application/json"}
     params = {"jql": jql_query, "maxResults": 100}
     response = requests.get(
@@ -28,27 +34,40 @@ def fetch_jira_issues(jql_query="project=Pikselite"):
         auth=HTTPBasicAuth(JIRA_USER, JIRA_API_TOKEN),
     )
     response.raise_for_status()
-    # print(response.json()["issues"])
     return response.json()["issues"]
 
 
-def create_github_issue(title, body):
-    url = f"{GITHUB_API_ENDPOINT}/repos/{GITHUB_REPO}/issues"
-    headers = {
-        "Authorization": f"token {GITHUB_TOKEN}",
-        "Accept": "application/vnd.github+json",
+def create_repository_issue(title, body):
+    """
+    Creates an issue in the repository using GraphQL and returns its node ID.
+    """
+    query = """
+    mutation CreateIssue($input: CreateIssueInput!) {
+      createIssue(input: $input) {
+        issue {
+          id
+          number
+          url
+        }
+      }
     }
-    data = {"title": title, "body": body}
-    response = requests.post(url, headers=headers, json=data)
-    response.raise_for_status()
-    return response.json()
+    """
+    variables = {
+        "input": {
+            "repositoryId": GITHUB_REPO_ID,
+            "title": title,
+            "body": body
+        }
+    }
+    result = run_graphql(query, variables)
+    issue = result["data"]["createIssue"]["issue"]
+    return issue["id"], issue["number"]
 
 
-def add_issue_to_project(project_id, issue_node_id):
+def add_issue_to_project(issue_node_id):
     """
-    Uses GitHub GraphQL API to add an issue (by its node_id) to a GitHub Project v2 board.
+    Adds an existing repository issue (by its node ID) to a GitHub Projects v2 board.
     """
-    url = "https://api.github.com/graphql"
     query = """
     mutation AddIssueToProject($input: AddProjectV2ItemByIdInput!) {
       addProjectV2ItemById(input: $input) {
@@ -58,18 +77,192 @@ def add_issue_to_project(project_id, issue_node_id):
       }
     }
     """
-    variables = {"input": {"projectId": project_id, "contentId": issue_node_id}
-                 }
+    variables = {
+        "input": {
+            "projectId": GITHUB_PROJECT_ID,
+            "contentId": issue_node_id
+        }
+    }
+    result = run_graphql(query, variables)
+    return result["data"]["addProjectV2ItemById"]["item"]["id"]
+
+
+def create_issue_on_board(title, body):
+    issue_node_id, issue_number = create_repository_issue(title, body)
+    project_item_id = add_issue_to_project(issue_node_id)
+    return project_item_id, issue_number
+
+
+def get_project_details():
+    url = "https://api.github.com/graphql"
+
+    headers = {
+        "Authorization": f"bearer {GITHUB_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    query = f"""
+    query {{
+      user(login: "{GITHUB_PROJECT_OWNER}") {{
+        projectV2(number: 9) {{
+          id
+          title
+          fields(first: 100) {{
+            nodes {{
+              ... on ProjectV2Field {{
+                id
+                name
+                dataType
+              }}
+              ... on ProjectV2IterationField {{
+                id
+                name
+                configuration {{
+                  iterations {{
+                    id
+                    title
+                  }}
+                }}
+              }}
+            }}
+          }}
+        }}
+      }}
+    }}
+    """
+
+    payload = {"query": query}
+
+    response = requests.post(url, headers=headers, json=payload)
+    response.raise_for_status()
+    return response.json()
+
+
+def run_graphql(query, variables):
+    url = "https://api.github.com/graphql"
+    headers = {
+        "Authorization": f"bearer {GITHUB_TOKEN}",
+        "Content-Type": "application/json",
+        "Accept": "application/vnd.github.starfox-preview+json"
+    }
+    response = requests.post(url, json={
+        "query": query, "variables": variables}, headers=headers)
+    print(response.json())
+    response.raise_for_status()
+    return response.json()
+
+
+def add_assignees_to_issue(assignable_id, assignee_ids):
+    """
+    Adds assignees to a GitHub issue using the GraphQL API.
+
+    Parameters:
+      assignable_id (str): The global node ID of the issue.
+      assignee_ids (list): A list of global node IDs for the users to be assigned.
+      token (str): Your GitHub personal access token.
+
+    Returns:
+      dict: The JSON response from the GraphQL API.
+    """
+    url = "https://api.github.com/graphql"
+    query = """
+    mutation AddAssignees($input: AddAssigneesToAssignableInput!) {
+      addAssigneesToAssignable(input: $input) {
+        assignable {
+          ... on Issue {
+            id
+            title
+            assignees(first: 10) {
+              nodes {
+                id
+                login
+              }
+            }
+          }
+        }
+      }
+    }
+    """
+    variables = {
+        "input": {
+            "assignableId": assignable_id,
+            "assigneeIds": assignee_ids
+        }
+    }
     headers = {
         "Authorization": f"Bearer {GITHUB_TOKEN}",
         "Content-Type": "application/json",
-        "Accept": "application/vnd.github.starfox-preview+json",
+        "Accept": "application/vnd.github.starfox-preview+json"
     }
-    response = requests.post(
-        url, json={"query": query, "variables": variables}, headers=headers
-    )
+    response = requests.post(url, headers=headers, json={
+        "query": query, "variables": variables})
     response.raise_for_status()
     return response.json()
+
+
+def update_infos(issue_node_id, side_infos_dict, items_id, user_id, issue_id):
+    for field_name in items_id["data"]["user"]["projectV2"]["fields"]["nodes"]:
+        # Verifies if the field name is not empty (jsust that {})
+        if field_name:
+            if field_name["name"] in side_infos_dict:
+                if field_name["name"] != "Sprint":
+                    print(field_name["dataType"])
+                    sent_value = side_infos_dict[field_name["name"]]
+                    key = field_name["dataType"].lower()
+                    if field_name["dataType"] == "ASSIGNEES":
+                        add_assignees_to_issue(issue_id, [user_id])
+                    else:
+                        query = """
+                        mutation UpdateField($input: UpdateProjectV2ItemFieldValueInput!) {
+                        updateProjectV2ItemFieldValue(input: $input) {
+                            projectV2Item {
+                            id
+                            }
+                        }
+                        }
+                        """
+                        variables = {
+                            "input": {
+                                "projectId": GITHUB_PROJECT_ID,
+                                "itemId": issue_node_id,
+                                "fieldId": field_name["id"],
+                                "value": {key: sent_value},
+                            }
+                        }
+                        run_graphql(query, variables)
+
+
+def get_user_node_id(username):
+    url = "https://api.github.com/graphql"
+    query = """
+    query GetUserId($login: String!) {
+      user(login: $login) {
+        id
+      }
+    }
+    """
+    variables = {"login": username}
+    headers = {
+        "Authorization": f"bearer {GITHUB_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    response = requests.post(url, json={
+        "query": query, "variables": variables}, headers=headers)
+    response.raise_for_status()
+    data = response.json()
+    return data["data"]["user"]["id"]
+
+
+def get_github_issue(issue_number):
+    url = f"https://api.github.com/repos/{GITHUB_PROJECT_OWNER}/{GITHUB_PROJECT_NAME}/issues/{issue_number}"
+    headers = {
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github.v3+json"
+    }
+    response = requests.get(url, headers=headers)
+    if response.status_code == 200:
+        return response.json()
+    else:
+        raise Exception(f"Failed to fetch issue: {response.status_code}, {response.text}")
 
 
 def replicate_jira_to_github():
@@ -99,6 +292,22 @@ def replicate_jira_to_github():
         parent = fields.get("parent")
         parent_info = parent.get("key") if parent else "No parent"
 
+        mapped_username = json.loads(GITHUB_USERNAMES)
+        for user in mapped_username:
+            if user.get(assignee_name) is not None:
+                for key, value in user.items():
+                    assignee_name = value
+        user_id = get_user_node_id(assignee_name)
+
+        side_infos_dict = {
+            "Start Date": start_date,
+            "End Date": due_date,
+            "Story point": story_points,
+            "Sprint": sprint,
+            "Assignees": assignee_name,
+            "Labels": labels_str,
+        }
+
         # Build the GitHub issue body
         body = (
             f"**Jira Ticket:** [{issue['key']}]({jira_url})\n\n"
@@ -117,22 +326,14 @@ def replicate_jira_to_github():
 
         # Create the GitHub issue
 
-        github_issue = create_github_issue(title, body)
-        print(f"Created GitHub Issue #{github_issue['number']} for Jira {issue['key']}")
+        issue_node_id, issue_number = create_issue_on_board(title, body)
+        issue_id = get_github_issue(issue_number)["node_id"]
 
-        # Add the newly created issue to the specified GitHub Project board
-        # Ensure that the created issue's JSON contains the 'node_id' field
+        items_id = get_project_details()
+        # print(items_id)
 
-        issue_node_id = github_issue.get("node_id")
-        if issue_node_id and GITHUB_PROJECT_ID:
-            add_issue_to_project(GITHUB_PROJECT_ID, issue_node_id)
-            print(
-                f"Added issue {github_issue['number']} to GitHub Project {GITHUB_PROJECT_ID}"
-            )
-        else:
-            print(
-                "Missing GitHub issue node_id or project ID; cannot add to project board."
-            )
+        update_infos(issue_node_id,
+                     side_infos_dict, items_id, user_id, issue_id)
 
 
 if __name__ == "__main__":

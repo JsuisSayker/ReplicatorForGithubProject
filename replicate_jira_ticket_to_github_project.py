@@ -233,7 +233,107 @@ def add_assignees_to_issue(assignable_id, assignee_ids):
     return response.json()
 
 
-def update_infos(issue_node_id, side_infos_dict, items_id, user_id, issue_id):
+def label_exists(label_name):
+    """
+    Checks if the specified label exists in the given repository.
+
+    Parameters:
+      owner (str): Repository owner (username or organization).
+      repo (str): Repository name.
+      label_name (str): The name of the label to check.
+      token (str): Your GitHub personal access token.
+
+    Returns:
+      bool: True if the label exists, False otherwise.
+    """
+    url = f"https://api.github.com/repos/{GITHUB_PROJECT_OWNER}/{GITHUB_PROJECT_NAME}/labels/{label_name}"
+    headers = {
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github+json"
+    }
+    response = requests.get(url, headers=headers)
+    return response.status_code == 200
+
+
+def create_label(label_name, color, description):
+    """
+    Creates a new label in the given repository.
+
+    Parameters:
+      owner (str): Repository owner.
+      repo (str): Repository name.
+      label_name (str): The name of the label to create.
+      color (str): A hex color code (without the '#' prefix).
+      description (str): Description for the label.
+      token (str): Your GitHub personal access token.
+
+    Returns:
+      dict: The JSON response from GitHub containing label details.
+    """
+    url = f"https://api.github.com/repos/{GITHUB_PROJECT_OWNER}/{GITHUB_PROJECT_NAME}/labels"
+    headers = {
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github+json",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "name": label_name,
+        "color": color,
+        "description": description
+    }
+    response = requests.post(url, headers=headers, json=data)
+    response.raise_for_status()
+    return response.json()
+
+
+def create_label_if_not_exists(labels_name):
+    """
+    Checks if a label exists in the repository; if not, creates it.
+
+    Parameters:
+      owner (str): Repository owner.
+      repo (str): Repository name.
+      label_name (str): The label name.
+      color (str): Hex color code (without '#' prefix).
+      description (str): Label description.
+      token (str): Your GitHub personal access token.
+
+    """
+    for label in labels_name:
+        if label_exists(label):
+            print(f"Label '{label}' already exists.")
+        else:
+            print(f"Label '{label}' not found. Creating it...")
+            color = input(f"Enter the color for the label in the following format (#eb0dbc) '{label}': ")
+            description = input(f"Enter the description for the label '{label}': ")
+            create_label(label, color, description)
+
+
+def add_labels_to_issue(issue_number, labels):
+    """
+    Adds one or more labels to a GitHub issue.
+
+    Parameters:
+      owner (str): Repository owner (username or organization).
+      repo (str): Repository name.
+      issue_number (int): The issue number.
+      token (str): Your GitHub personal access token.
+      labels (list): A list of label names to add (e.g., ["bug", "enhancement"]).
+
+    Returns:
+      dict: The JSON response from GitHub's API.
+    """
+    url = f"https://api.github.com/repos/{GITHUB_PROJECT_OWNER}/{GITHUB_PROJECT_NAME}/issues/{issue_number}/labels"
+    headers = {
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github+json"
+    }
+    response = requests.post(url, headers=headers, json=labels)
+    response.raise_for_status()
+    return response.json()
+
+
+def update_infos(issue_node_id, side_infos_dict, items_id, user_id, issue_id, issue_number):
     for field_name in items_id["data"]["user"]["projectV2"]["fields"]["nodes"]:
         # Verifies if the field name is not empty (jsust that {})
         if field_name:
@@ -241,6 +341,9 @@ def update_infos(issue_node_id, side_infos_dict, items_id, user_id, issue_id):
                 if field_name["name"] != "Sprint":
                     sent_value = side_infos_dict[field_name["name"]]
                     key = field_name["dataType"].lower()
+                    if field_name["dataType"] == "LABELS":
+                        add_labels_to_issue(issue_number, [sent_value])
+                        continue
                     if field_name["dataType"] == "ASSIGNEES":
                         add_assignees_to_issue(issue_id, [user_id])
                     else:
@@ -356,8 +459,10 @@ def replicate_jira_to_github():
             f"**Parent Ticket:** {parent_info}\n"
         )
 
-        # Create the GitHub issue
+        # Create label if it doesn't exist
+        create_label_if_not_exists(labels)
 
+        # Create the GitHub issue
         issue_node_id, issue_number = create_issue_on_board(title, body)
         issue_id = get_github_issue(issue_number)["node_id"]
 
@@ -365,7 +470,7 @@ def replicate_jira_to_github():
         # print(items_id)
 
         update_infos(issue_node_id,
-                     side_infos_dict, items_id, user_id, issue_id)
+                     side_infos_dict, items_id, user_id, issue_id, issue_number)
 
 
 if __name__ == "__main__":

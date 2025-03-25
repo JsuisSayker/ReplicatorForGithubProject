@@ -3,6 +3,7 @@ import os
 import json
 from requests.auth import HTTPBasicAuth
 from dotenv import load_dotenv
+from jira import JIRA
 
 # Load environment variables from .env file
 load_dotenv()
@@ -12,6 +13,7 @@ JIRA_USER = os.getenv("JIRA_USER")
 JIRA_API_TOKEN = os.getenv("JIRA_API_TOKEN")
 JIRA_PROJECT_NAME = os.getenv("JIRA_PROJECT_NAME")
 JIRA_BASE_URL = os.getenv("JIRA_BASE_URL")
+JIRA_BOARD_ID = os.getenv("JIRA_BOARD_ID")
 
 GITHUB_API_ENDPOINT = os.getenv("GITHUB_API_ENDPOINT")
 GITHUB_REPO = os.getenv("GITHUB_REPO")
@@ -34,13 +36,43 @@ def fetch_jira_issues(jql_query=f"project={JIRA_PROJECT_NAME}"):
         auth=HTTPBasicAuth(JIRA_USER, JIRA_API_TOKEN),
     )
     response.raise_for_status()
-    return response.json()["issues"]
+    issues = response.json()["issues"]
+
+    sprints = []
+    start_at = 0
+    max_results = 50  # Jira default page size for sprints
+
+    jira_instance = JIRA(server=JIRA_BASE_URL, basic_auth=(JIRA_USER, JIRA_API_TOKEN))
+
+    board_id = int(JIRA_BOARD_ID)
+    sprints_page = jira_instance.sprints(
+        board_id, startAt=start_at, maxResults=max_results, state="active,closed,future"
+    )
+    while True:
+        # Retrieve a page of sprints
+
+        if not sprints_page:
+            break
+        for sprint in sprints_page:
+            detail = {
+                "id": sprint.id,
+                "name": sprint.name,
+                "goal": getattr(sprint, "goal", None),
+                "startDate": getattr(sprint, "startDate", None),
+                "endDate": getattr(sprint, "endDate", None),
+                "state": getattr(sprint, "state", None)
+            }
+            sprints.append(detail)
+
+        if len(sprints_page) < max_results:
+            break
+        start_at += max_results
+
+    return {"issues": issues, "sprints": sprints}
 
 
 def create_repository_issue(title, body, repo_id):
-    """
-    Creates an issue in the repository using GraphQL and returns its node ID.
-    """
+
     query = """
     mutation CreateIssue($input: CreateIssueInput!) {
       createIssue(input: $input) {
@@ -65,9 +97,7 @@ def create_repository_issue(title, body, repo_id):
 
 
 def add_issue_to_project(issue_node_id):
-    """
-    Adds an existing repository issue (by its node ID) to a GitHub Projects v2 board.
-    """
+
     query = """
     mutation AddIssueToProject($input: AddProjectV2ItemByIdInput!) {
       addProjectV2ItemById(input: $input) {
@@ -88,17 +118,7 @@ def add_issue_to_project(issue_node_id):
 
 
 def get_repository_id(owner, repository):
-    """
-    Retrieves the repository node ID from GitHub using the GraphQL API.
 
-    Parameters:
-      owner (str): The repository owner (username or organization).
-      repository (str): The repository name.
-      token (str): Your GitHub personal access token.
-
-    Returns:
-      str: The repository's node ID.
-    """
     url = "https://api.github.com/graphql"
     query = """
     query {
@@ -186,17 +206,7 @@ def run_graphql(query, variables):
 
 
 def add_assignees_to_issue(assignable_id, assignee_ids):
-    """
-    Adds assignees to a GitHub issue using the GraphQL API.
 
-    Parameters:
-      assignable_id (str): The global node ID of the issue.
-      assignee_ids (list): A list of global node IDs for the users to be assigned.
-      token (str): Your GitHub personal access token.
-
-    Returns:
-      dict: The JSON response from the GraphQL API.
-    """
     url = "https://api.github.com/graphql"
     query = """
     mutation AddAssignees($input: AddAssigneesToAssignableInput!) {
@@ -234,18 +244,7 @@ def add_assignees_to_issue(assignable_id, assignee_ids):
 
 
 def label_exists(label_name):
-    """
-    Checks if the specified label exists in the given repository.
 
-    Parameters:
-      owner (str): Repository owner (username or organization).
-      repo (str): Repository name.
-      label_name (str): The name of the label to check.
-      token (str): Your GitHub personal access token.
-
-    Returns:
-      bool: True if the label exists, False otherwise.
-    """
     url = f"https://api.github.com/repos/{GITHUB_PROJECT_OWNER}/{GITHUB_PROJECT_NAME}/labels/{label_name}"
     headers = {
         "Authorization": f"Bearer {GITHUB_TOKEN}",
@@ -256,20 +255,7 @@ def label_exists(label_name):
 
 
 def create_label(label_name, color, description):
-    """
-    Creates a new label in the given repository.
 
-    Parameters:
-      owner (str): Repository owner.
-      repo (str): Repository name.
-      label_name (str): The name of the label to create.
-      color (str): A hex color code (without the '#' prefix).
-      description (str): Description for the label.
-      token (str): Your GitHub personal access token.
-
-    Returns:
-      dict: The JSON response from GitHub containing label details.
-    """
     url = f"https://api.github.com/repos/{GITHUB_PROJECT_OWNER}/{GITHUB_PROJECT_NAME}/labels"
     headers = {
         "Authorization": f"Bearer {GITHUB_TOKEN}",
@@ -287,18 +273,7 @@ def create_label(label_name, color, description):
 
 
 def create_label_if_not_exists(labels_name):
-    """
-    Checks if a label exists in the repository; if not, creates it.
 
-    Parameters:
-      owner (str): Repository owner.
-      repo (str): Repository name.
-      label_name (str): The label name.
-      color (str): Hex color code (without '#' prefix).
-      description (str): Label description.
-      token (str): Your GitHub personal access token.
-
-    """
     for label in labels_name:
         if label_exists(label):
             print(f"Label '{label}' already exists.")
@@ -310,19 +285,6 @@ def create_label_if_not_exists(labels_name):
 
 
 def add_labels_to_issue(issue_number, labels):
-    """
-    Adds one or more labels to a GitHub issue.
-
-    Parameters:
-      owner (str): Repository owner (username or organization).
-      repo (str): Repository name.
-      issue_number (int): The issue number.
-      token (str): Your GitHub personal access token.
-      labels (list): A list of label names to add (e.g., ["bug", "enhancement"]).
-
-    Returns:
-      dict: The JSON response from GitHub's API.
-    """
     url = f"https://api.github.com/repos/{GITHUB_PROJECT_OWNER}/{GITHUB_PROJECT_NAME}/issues/{issue_number}/labels"
     headers = {
         "Authorization": f"Bearer {GITHUB_TOKEN}",
@@ -333,38 +295,74 @@ def add_labels_to_issue(issue_number, labels):
     return response.json()
 
 
+def assign_iteration_to_issue(issue_node_id, field_name, side_infos_dict):
+
+    # url = "https://api.github.com/graphql"
+    query = """
+    mutation UpdateIterationField($input: UpdateProjectV2ItemFieldValueInput!) {
+      updateProjectV2ItemFieldValue(input: $input) {
+        projectV2Item {
+          id
+        }
+      }
+    }
+    """
+    iteration_option_id = ""
+
+    field_id = field_name["id"]
+    for current_iteration in field_name["configuration"]["iterations"]:
+        if iteration_option_id != "":
+            break
+        for active_iteration in side_infos_dict["Sprint"]:
+            if iteration_option_id != "":
+                break
+            if (current_iteration["title"] == active_iteration["name"]) and active_iteration["state"] == "active":
+                iteration_option_id = current_iteration["id"]
+
+    variables = {
+        "input": {
+            "projectId": GITHUB_PROJECT_ID,
+            "itemId": issue_node_id,
+            "fieldId": field_id,
+            "value": {"iterationId": iteration_option_id}
+        }
+    }
+    run_graphql(query, variables)
+
+
 def update_infos(issue_node_id, side_infos_dict, items_id, user_id, issue_id, issue_number):
     for field_name in items_id["data"]["user"]["projectV2"]["fields"]["nodes"]:
-        # Verifies if the field name is not empty (jsust that {})
         if field_name:
             if field_name["name"] in side_infos_dict:
-                if field_name["name"] != "Sprint":
-                    sent_value = side_infos_dict[field_name["name"]]
-                    key = field_name["dataType"].lower()
-                    if field_name["dataType"] == "LABELS":
-                        add_labels_to_issue(issue_number, [sent_value])
-                        continue
-                    if field_name["dataType"] == "ASSIGNEES":
-                        add_assignees_to_issue(issue_id, [user_id])
-                    else:
-                        query = """
-                        mutation UpdateField($input: UpdateProjectV2ItemFieldValueInput!) {
-                        updateProjectV2ItemFieldValue(input: $input) {
-                            projectV2Item {
-                            id
-                            }
+                sent_value = side_infos_dict[field_name["name"]]
+                if field_name["name"] == "Sprint":
+                    assign_iteration_to_issue(issue_node_id, field_name, side_infos_dict)
+                    continue
+                key = field_name["dataType"].lower()
+                if field_name["dataType"] == "LABELS":
+                    add_labels_to_issue(issue_number, [sent_value])
+                    continue
+                if field_name["dataType"] == "ASSIGNEES":
+                    add_assignees_to_issue(issue_id, [user_id])
+                else:
+                    query = """
+                    mutation UpdateField($input: UpdateProjectV2ItemFieldValueInput!) {
+                    updateProjectV2ItemFieldValue(input: $input) {
+                        projectV2Item {
+                        id
                         }
+                    }
+                    }
+                    """
+                    variables = {
+                        "input": {
+                            "projectId": GITHUB_PROJECT_ID,
+                            "itemId": issue_node_id,
+                            "fieldId": field_name["id"],
+                            "value": {key: sent_value},
                         }
-                        """
-                        variables = {
-                            "input": {
-                                "projectId": GITHUB_PROJECT_ID,
-                                "itemId": issue_node_id,
-                                "fieldId": field_name["id"],
-                                "value": {key: sent_value},
-                            }
-                        }
-                        run_graphql(query, variables)
+                    }
+                    run_graphql(query, variables)
 
 
 def get_user_node_id(username):
@@ -401,9 +399,87 @@ def get_github_issue(issue_number):
         raise Exception(f"Failed to fetch issue: {response.status_code}, {response.text}")
 
 
+def sprint_found_in_github(items_id):
+    for item in items_id["data"]["user"]["projectV2"]["fields"]["nodes"]:
+        if item:
+            if item["name"] == "Sprint":
+                return True
+    return False
+
+
+def sprint_field_is_already_existing(items_id, sprints, creation_date):
+    final_dict = {}
+
+    sprint_found = sprint_found_in_github(items_id)
+    if not sprint_found:
+        for sprint in sprints:
+            start_date = sprint["startDate"]
+            end_date = sprint["endDate"]
+            complete_start_date = start_date.split("T")[0]
+
+            if final_dict == {}:
+                final_dict = {creation_date: {"iterations": []}}
+                day_start_date = start_date.split("-")[2].split("T")[0]
+                day_end_date = end_date.split("-")[2].split("T")[0]
+                day_difference = int(day_end_date) - int(day_start_date)
+
+            object_to_insert = {
+                "title": sprint["name"],
+                "startDate": complete_start_date,
+                "duration": day_difference
+                }
+
+            final_dict[creation_date]["iterations"].append(object_to_insert)
+        return False, final_dict
+    return True, final_dict
+
+
+def create_iteration_field(fields_name, creation_date):
+
+    mutation = """
+    mutation CreateIterationField($input: CreateProjectV2FieldInput!) {
+      createProjectV2Field(input: $input) {
+        projectV2Field {
+          ... on ProjectV2IterationField {
+            id
+            name
+            dataType
+            configuration {
+              iterations {
+                id
+                title
+                startDate
+                duration
+              }
+            }
+          }
+        }
+      }
+    }
+    """
+    iteration_config = {
+        "startDate": creation_date,
+        "duration": fields_name[creation_date]["iterations"][0]["duration"],
+        "iterations": fields_name[creation_date]["iterations"]
+
+    }
+    variables = {
+        "input": {
+            "projectId": GITHUB_PROJECT_ID,
+            "name": "Sprint",
+            "dataType": "ITERATION",
+            "iterationConfiguration": iteration_config
+        }
+    }
+    result = run_graphql(mutation, variables)
+    created_field = result["data"]["createProjectV2Field"]["projectV2Field"]
+    return created_field
+
+
 def replicate_jira_to_github():
-    issues = fetch_jira_issues()
-    for issue in issues:
+    fetched_values = fetch_jira_issues()
+
+    for issue in fetched_values["issues"]:
         fields = issue.get("fields", {})
 
         # Basic fields
@@ -415,9 +491,7 @@ def replicate_jira_to_github():
         start_date = fields.get("customfield_10015", "Not set")
         due_date = fields.get("duedate", "Not set")
         story_points = fields.get("customfield_10016", "Not set")
-        sprint = fields.get("customfield_10020", "Not set")
-        if isinstance(sprint, list):
-            sprint = ", ".join([s["name"] for s in sprint])
+        creation_date = fields.get("created", "Not Set").split("T")[0]
         assignee = fields.get("assignee", {})
         assignee_name = assignee.get("displayName", "Unassigned")
         labels = fields.get("labels", [])
@@ -438,7 +512,7 @@ def replicate_jira_to_github():
             "Start Date": start_date,
             "End Date": due_date,
             "Story point": story_points,
-            "Sprint": sprint,
+            "Sprint": fetched_values["sprints"],
             "Assignees": assignee_name,
             "Labels": labels_str,
         }
@@ -450,7 +524,6 @@ def replicate_jira_to_github():
             f"**Title:** {title}\n\n"
             f"**Description:**\n{description}\n\n"
             f"**Story Points:** {story_points}\n\n"
-            f"**Sprint:** {sprint}\n\n"
             f"**Assignee:** {assignee_name}\n\n"
             f"**Labels:** {labels_str}\n\n"
             f"**Priority:** {priority}\n\n"
@@ -469,8 +542,14 @@ def replicate_jira_to_github():
         items_id = get_project_details()
         # print(items_id)
 
+        existing_sprint, fields_name = sprint_field_is_already_existing(
+            items_id, fetched_values["sprints"], creation_date)
+        if existing_sprint is False:
+            create_iteration_field(fields_name, creation_date)
+
         update_infos(issue_node_id,
-                     side_infos_dict, items_id, user_id, issue_id, issue_number)
+                     side_infos_dict, items_id,
+                     user_id, issue_id, issue_number)
 
 
 if __name__ == "__main__":

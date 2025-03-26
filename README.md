@@ -7,6 +7,7 @@ This is a simple script that permit you to replicate your tickets on JIRA to you
 - [How to use it](#how-to-use-it)
 - [Useful command](#useful-command)
 - [.env config](#env-file)
+- [Warning](#warning)
 
 ## Prerequisites
 
@@ -16,6 +17,17 @@ This is a simple script that permit you to replicate your tickets on JIRA to you
 
 To launch the script you need to do the following command :
 
+clone the repo
+```sh
+git clone git@github.com:JsuisSayker/ReplicatorForGithubProject.git
+```
+
+Go into the repo
+```sh
+cd ReplicatorForGithubProject
+```
+
+Launch the script using docker compose
 ```sh
 docker compose up
 ```
@@ -89,3 +101,8 @@ for the `GITHUB_TOKEN` and `GITHUB_PROJECT_ID` you can use what's [above](#usefu
 `GITHUB_PROJECT_NUMBER` is the Github board id that you can get by looking at the number in the url of your project, it will be something like : https://github.com/users/my_github_username/projects/**9**/views/1 . And you need to take the number after /projects/ .
 
 `GITHUB_USERNAMES` is a list of object that permit to do the link between your JIRA user and your Github username to assign someone to the task (in the example there is only two object but you need as much object as you have of member in your team).
+
+# Warning
+
+The script is not complete so for the moment if you're trying to just update a card it's not possible, it will recreate a new card instead, but it will be done in the future, and some fields are not created in the script, but will also be in the future.
+Be aware that if you create a status (a column like `testing` in JIRA, the graphQL integration API of github do not permit for the moment to create a new status in github, or i doesn't know the right command : if you know it feel free to reach out), you need to create it manually in your board's setting.

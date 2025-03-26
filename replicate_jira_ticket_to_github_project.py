@@ -150,7 +150,6 @@ def create_issue_on_board(title, body):
 
 def get_project_details():
     url = "https://api.github.com/graphql"
-
     headers = {
         "Authorization": f"bearer {GITHUB_TOKEN}",
         "Content-Type": "application/json"
@@ -178,15 +177,22 @@ def get_project_details():
                   }}
                 }}
               }}
+              ... on ProjectV2SingleSelectField {{
+                id
+                name
+                dataType
+                options {{
+                  id
+                  name
+                }}
+              }}
             }}
           }}
         }}
       }}
     }}
     """
-
     payload = {"query": query}
-
     response = requests.post(url, headers=headers, json=payload)
     response.raise_for_status()
     return response.json()
@@ -297,7 +303,6 @@ def add_labels_to_issue(issue_number, labels):
 
 def assign_iteration_to_issue(issue_node_id, field_name, side_infos_dict):
 
-    # url = "https://api.github.com/graphql"
     query = """
     mutation UpdateIterationField($input: UpdateProjectV2ItemFieldValueInput!) {
       updateProjectV2ItemFieldValue(input: $input) {
@@ -308,7 +313,6 @@ def assign_iteration_to_issue(issue_node_id, field_name, side_infos_dict):
     }
     """
     iteration_option_id = ""
-
     field_id = field_name["id"]
     for current_iteration in field_name["configuration"]["iterations"]:
         if iteration_option_id != "":
@@ -330,17 +334,52 @@ def assign_iteration_to_issue(issue_node_id, field_name, side_infos_dict):
     run_graphql(query, variables)
 
 
-def update_infos(issue_node_id, side_infos_dict, items_id, user_id, issue_id, issue_number):
+def update_status_field(issue_node_id, field_name, actual_status):
+
+    query = """
+    mutation UpdateStatusField($input: UpdateProjectV2ItemFieldValueInput!) {
+      updateProjectV2ItemFieldValue(input: $input) {
+        projectV2Item {
+          id
+        }
+      }
+    }
+    """
+    field_id = field_name["id"]
+    comparative_status = actual_status.replace(" ", "").lower()
+
+    for current_status in field_name["options"]:
+        if (current_status["name"].replace(" ", "").lower()) == comparative_status:
+            option_node_id = current_status["id"]
+            break
+
+    variables = {
+        "input": {
+            "projectId": GITHUB_PROJECT_ID,
+            "itemId": issue_node_id,
+            "fieldId": field_id,
+            "value": {"singleSelectOptionId": option_node_id}
+        }
+    }
+    run_graphql(query, variables)
+
+
+def update_infos(issue_node_id, side_infos_dict, items_id, user_id, issue_id, issue_number, created_sprint):
+    sprint_found = False
     for field_name in items_id["data"]["user"]["projectV2"]["fields"]["nodes"]:
         if field_name:
             if field_name["name"] in side_infos_dict:
                 sent_value = side_infos_dict[field_name["name"]]
                 if field_name["name"] == "Sprint":
                     assign_iteration_to_issue(issue_node_id, field_name, side_infos_dict)
+                    sprint_found = True
                     continue
                 key = field_name["dataType"].lower()
                 if field_name["dataType"] == "LABELS":
                     add_labels_to_issue(issue_number, [sent_value])
+                    continue
+                if field_name["dataType"] == "SINGLE_SELECT":
+                    update_status_field(issue_node_id, field_name, side_infos_dict["Status"])
                     continue
                 if field_name["dataType"] == "ASSIGNEES":
                     add_assignees_to_issue(issue_id, [user_id])
@@ -363,6 +402,8 @@ def update_infos(issue_node_id, side_infos_dict, items_id, user_id, issue_id, is
                         }
                     }
                     run_graphql(query, variables)
+    if sprint_found is False:
+        assign_iteration_to_issue(issue_node_id, created_sprint, side_infos_dict)
 
 
 def get_user_node_id(username):
@@ -486,7 +527,7 @@ def replicate_jira_to_github():
         column = fields.get("status", {}).get("name", "Not set")
         title = fields.get("summary", "No summary provided")
         description = fields.get("description", "No description provided")
-        jira_url = f"{JIRA_BASE_URL}/browse/{issue['key']}"
+        # jira_url = f"{JIRA_BASE_URL}/browse/{issue['key']}"
 
         start_date = fields.get("customfield_10015", "Not set")
         due_date = fields.get("duedate", "Not set")
@@ -514,22 +555,13 @@ def replicate_jira_to_github():
             "Story point": story_points,
             "Sprint": fetched_values["sprints"],
             "Assignees": assignee_name,
+            "Status": column,
             "Labels": labels_str,
         }
 
         # Build the GitHub issue body
         body = (
-            f"**Jira Ticket:** [{issue['key']}]({jira_url})\n\n"
-            f"**Column:** {column}\n\n"
-            f"**Title:** {title}\n\n"
-            f"**Description:**\n{description}\n\n"
-            f"**Story Points:** {story_points}\n\n"
-            f"**Assignee:** {assignee_name}\n\n"
-            f"**Labels:** {labels_str}\n\n"
-            f"**Priority:** {priority}\n\n"
-            f"**Start Date:** {start_date}\n\n"
-            f"**Due Date:** {due_date}\n\n"
-            f"**Parent Ticket:** {parent_info}\n"
+            f"{description}\n\n"
         )
 
         # Create label if it doesn't exist
@@ -544,12 +576,13 @@ def replicate_jira_to_github():
 
         existing_sprint, fields_name = sprint_field_is_already_existing(
             items_id, fetched_values["sprints"], creation_date)
+        created_sprint = {}
         if existing_sprint is False:
-            create_iteration_field(fields_name, creation_date)
+            created_sprint = create_iteration_field(fields_name, creation_date)
 
         update_infos(issue_node_id,
                      side_infos_dict, items_id,
-                     user_id, issue_id, issue_number)
+                     user_id, issue_id, issue_number, created_sprint)
 
 
 if __name__ == "__main__":

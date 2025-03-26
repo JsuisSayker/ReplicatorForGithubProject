@@ -1,0 +1,8 @@
+services:
+  replicator:
+    build:
+      context: ./
+      dockerfile: Dockerfile
+    container_name: replicator
+    ports:
+      - "8000:8000"

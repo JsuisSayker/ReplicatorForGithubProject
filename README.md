@@ -10,11 +10,15 @@ This is a simple script that permit you to replicate your tickets on JIRA to you
 
 ## Prerequisites
 
-- Python 3.6+
+- [docker compose](https://docs.docker.com/compose/install/)
 
 ## How to use it
 
-TODO
+To launch the script you need to do the following command :
+
+```sh
+docker compose up
+```
 
 ## Useful command
 

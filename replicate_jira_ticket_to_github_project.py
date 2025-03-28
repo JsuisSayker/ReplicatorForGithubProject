@@ -519,11 +519,102 @@ def create_iteration_field(fields_name, creation_date):
     return created_field
 
 
+def dict_compare(d1, d2):
+    d1_keys = set(d1.keys())
+    d2_keys = set(d2.keys())
+    shared_keys = d1_keys.intersection(d2_keys)
+    added = d1_keys - d2_keys
+    removed = d2_keys - d1_keys
+    modified = {o: (d1[o], d2[o]) for o in shared_keys if d1[o] != d2[o]}
+    same = set(o for o in shared_keys if d1[o] == d2[o])
+    return added, removed, modified, same
+
+
+def is_same_infos(jira_saved_infos, actual_issue, sprints):
+    issue_exist = False
+    issue_modified = False
+    issue_added = False
+    fields = actual_issue.get("fields", {})
+
+    column = fields.get("status", {}).get("name", "Not set")
+    start_date = fields.get("customfield_10015", "Not set")
+    due_date = fields.get("duedate", "Not set")
+    story_points = fields.get("customfield_10016", "Not set")
+    assignee = fields.get("assignee", {})
+    assignee_name = assignee.get("displayName", "Unassigned")
+    labels = fields.get("labels", [])
+    labels_str = ", ".join(labels) if labels else "None"
+
+    side_infos_dict = {
+        "Start Date": start_date,
+        "End Date": due_date,
+        "Story point": story_points,
+        "Sprint": sprints,
+        "Assignees": assignee_name,
+        "Status": column,
+        "Labels": labels_str,
+    }
+
+    jira_new_infos = {
+            "id": actual_issue.get("id"),
+            "infos": {
+                "title": fields.get("summary"),
+                "description": fields.get("description"),
+                "side_infos": side_infos_dict,
+                },
+        }
+    added, removed, modified, same = dict_compare(jira_saved_infos, jira_new_infos)
+    if "infos" and "id" in same:
+        issue_exist = True
+
+    if "infos" in modified:
+        issue_exist = True
+        issue_modified = True
+
+    return {"id": jira_saved_infos["id"], "existing": issue_exist, "modified": issue_modified, "added": issue_added}
+
+
+def find_issue_to_update(fetched_values):
+    final_infos = []
+    try:
+        jira_saved_infos = open("jira_save.json", "r")
+    except FileNotFoundError:
+        for issue in fetched_values["issues"]:
+            fields = issue.get("fields", {})
+            final_infos.append({"id": fields.get("id"), "existing": False})
+        return final_infos
+    jira_saved_infos_dict = json.load(jira_saved_infos)
+    i = 0
+    for issue in fetched_values["issues"]:
+        final_infos.append(is_same_infos(jira_saved_infos_dict[i], issue, fetched_values["sprints"]))
+        i += 1
+    return final_infos
+
+
+def corresponding_jira_issue(jira_issue_number, list_of_infos):
+    for issue in list_of_infos:
+        if jira_issue_number == issue["id"]:
+            return issue
+
+
+def get_linked_github_issue(actual_jira_issue_number):
+    github_save = open("github_save.json", "r")
+    github_saved_infos = json.load(github_save)
+    for issue in github_saved_infos:
+        if issue["linked_jira_issue_number"] == actual_jira_issue_number:
+            return issue
+
+
 def replicate_jira_to_github():
+    saved_infos = []
+    jira_issues_infos = []
     fetched_values = fetch_jira_issues()
+
+    list_of_infos = find_issue_to_update(fetched_values)
 
     for issue in fetched_values["issues"]:
         fields = issue.get("fields", {})
+        dict_of_infos = corresponding_jira_issue(fields.get("id"), list_of_infos)
 
         # Basic fields
         column = fields.get("status", {}).get("name", "Not set")
@@ -539,10 +630,10 @@ def replicate_jira_to_github():
         assignee_name = assignee.get("displayName", "Unassigned")
         labels = fields.get("labels", [])
         labels_str = ", ".join(labels) if labels else "None"
-        priority = fields.get("priority", {}).get("name", "Not set")
+        # priority = fields.get("priority", {}).get("name", "Not set")
 
-        parent = fields.get("parent")
-        parent_info = parent.get("key") if parent else "No parent"
+        # parent = fields.get("parent")
+        # parent_info = parent.get("key") if parent else "No parent"
 
         mapped_username = json.loads(GITHUB_USERNAMES)
         for user in mapped_username:
@@ -569,12 +660,18 @@ def replicate_jira_to_github():
         # Create label if it doesn't exist
         create_label_if_not_exists(labels)
 
-        # Create the GitHub issue
-        issue_node_id, issue_number = create_issue_on_board(title, body)
-        issue_id = get_github_issue(issue_number)["node_id"]
+        # # Create the GitHub issue
+        if dict_of_infos["existing"] is False:
+            issue_node_id, issue_number = create_issue_on_board(title, body)
+            issue_id = get_github_issue(issue_number)["node_id"]
+        else:
+            gitub_issue_infos = get_linked_github_issue(dict_of_infos["id"])
+            issue_node_id = gitub_issue_infos["issue_node_id"]
+            issue_number = gitub_issue_infos["issue_number"]
+            issue_id = gitub_issue_infos["issue_id"]
 
         items_id = get_project_details()
-        # print(items_id)
+        # # print(items_id)
 
         existing_sprint, fields_name = sprint_field_is_already_existing(
             items_id, fetched_values["sprints"], creation_date)
@@ -585,6 +682,35 @@ def replicate_jira_to_github():
         update_infos(issue_node_id,
                      side_infos_dict, items_id,
                      user_id, issue_id, issue_number, created_sprint)
+        jira_infos = {
+            "id": fields.get("id"),
+            "infos": {
+                "title": title,
+                "description": description,
+                "side_infos": side_infos_dict,
+                "created_sprint": created_sprint,
+                },
+        }
+        jira_issues_infos.append(jira_infos)
+
+        infos = {
+            "title": title,
+            "linked_jira_issue_number": fields.get("id"),
+            "description": description,
+            "issue_node_id": issue_node_id,
+            "issue_number": issue_number,
+            "issue_id": issue_id,
+            "user_id": user_id,
+            "side_infos": side_infos_dict,
+            "created_sprint": created_sprint,
+        }
+
+        saved_infos.append(infos)
+
+    with open("jira_save.json", "w") as file:
+        json.dump(jira_issues_infos, file)
+    with open("github_save.json", "w") as file:
+        json.dump(saved_infos, file)
 
 
 if __name__ == "__main__":

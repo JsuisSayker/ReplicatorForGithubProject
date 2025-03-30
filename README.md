@@ -104,5 +104,5 @@ for the `GITHUB_TOKEN` and `GITHUB_PROJECT_ID` you can use what's [above](#usefu
 
 # Warning
 
-The script is not complete so for the moment if you're trying to just update a card it's not possible, it will recreate a new card instead, but it will be done in the future, and some fields are not created in the script, but will also be in the future.
+The script is not complete so for the moment, some fields are not created in the script, but will also be in the future.
 Be aware that if you create a status (a column like `testing` in JIRA, the graphQL integration API of github do not permit for the moment to create a new status in github, or i doesn't know the right command : if you know it feel free to reach out), you need to create it manually in your board's setting.
